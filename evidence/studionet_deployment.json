@@ -1,0 +1,86 @@
+{
+  "network": "studionet",
+  "rpc_url": "https://studio.genlayer.com/api",
+  "explorer_url": "https://genlayer-explorer.vercel.app",
+  "chain_id": 61999,
+  "sponsor_address": "0x3de43AA2f7162c80af98abe78222aE0Cdf83c506",
+  "worker_address": "0x0d8f2D2d77948F2993cE034625c700F9E4C7de44",
+  "contract_address": "0x6C972C4AEC5872E4089bc20849218B6402cecf02",
+  "deploy_tx": "0x66f6bcd1527e6732aaa401bf02a2b17c1f50159d0ec020e451ad02aa9ec564b7",
+  "local_sha256": "b56bf397f2165c7e3c76b91bbdaa7db50cc83b5dca81c290b57a9fc53a471fb3",
+  "chain_sha256": "b56bf397f2165c7e3c76b91bbdaa7db50cc83b5dca81c290b57a9fc53a471fb3",
+  "sha256_identity": true,
+  "explorer_probe": {
+    "url": "https://genlayer-explorer.vercel.app/api/transactions/0x66f6bcd1527e6732aaa401bf02a2b17c1f50159d0ec020e451ad02aa9ec564b7",
+    "ok": false,
+    "error": "HTTP 503"
+  },
+  "final_state": {
+    "settled_bounty": {
+      "achieved_score": 90,
+      "audit_summary": "Meets rubric and keyword bar",
+      "bounty_id": 1,
+      "deliverable_url": "https://example.com/deliverable/settlement-module",
+      "escrow_amount": 1000000,
+      "min_pass_score": 75,
+      "payout_released": 1000000,
+      "required_keywords_csv": "settlement,escrow,test",
+      "requirements_rubric": "Clear module, escrow accounting, documented methods",
+      "sponsor": "0x3de43AA2f7162c80af98abe78222aE0Cdf83c506",
+      "status": "SETTLED_PAID",
+      "title": "Implement settlement module",
+      "worker": "0x0d8f2D2d77948F2993cE034625c700F9E4C7de44"
+    },
+    "worker_claimable": 1000000,
+    "escrow_summary": {
+      "open": 1,
+      "refunded": 0,
+      "rejected": 0,
+      "settled_paid": 1,
+      "submitted": 0,
+      "total_bounties": 2,
+      "total_escrow_locked": 1000000,
+      "total_payout_released": 1000000
+    },
+    "unauthorized_attempt_bounty_status": "OPEN"
+  },
+  "transactions": [
+    {
+      "method": "deploy",
+      "tx_hash": "0x66f6bcd1527e6732aaa401bf02a2b17c1f50159d0ec020e451ad02aa9ec564b7",
+      "status": "FINALIZED",
+      "reached_finalized": true
+    },
+    {
+      "method": "create_bounty",
+      "tx_hash": "0x7e5745de0a40eb790579aa972d1e2338e82c5e3fc5e54c468791affa44c6e0d6",
+      "status": "FINALIZED",
+      "reached_finalized": true
+    },
+    {
+      "method": "submit_deliverable",
+      "tx_hash": "0x18cda68c7d1a3ff4d64b7e264894e15d2a6d07ca45d24db925b82cce15325976",
+      "status": "FINALIZED",
+      "reached_finalized": true
+    },
+    {
+      "method": "approve_deterministic_settlement",
+      "tx_hash": "0x2f88647b486d75df996c5e2625fe0c951291d0bb49d5f8736f405b4d0406f7a5",
+      "status": "FINALIZED",
+      "reached_finalized": true
+    },
+    {
+      "method": "create_bounty",
+      "tx_hash": "0x7696ef0c1ab41a9e133d4d7dffcb8a2f520d7b0774676f76b6c575a087949354",
+      "status": "FINALIZED",
+      "reached_finalized": true
+    },
+    {
+      "method": "submit_deliverable",
+      "tx_hash": "0x49cc93ee23d45b63a9cbd9977820b4e6833fd70bd601cac1ec1609ac64678a35",
+      "status": "FINALIZED",
+      "reached_finalized": true,
+      "expected": "no state change (wrong caller)"
+    }
+  ]
+}
