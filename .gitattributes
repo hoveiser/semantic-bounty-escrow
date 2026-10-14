@@ -1,0 +1,4 @@
+# Preserve exact file bytes so the on-chain source hash matches the repo.
+# GenLayer stores the deployed contract byte-for-byte, so the committed file
+# must not be line-ending normalized by git.
+* -text
