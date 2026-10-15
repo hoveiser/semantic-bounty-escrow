@@ -1,10 +1,11 @@
 # Studionet deployment driver and on-chain verifier for SemanticBountyEscrow.
 
 """Deploy SemanticBountyEscrow to GenLayer studionet, drive a real multi-account
-escrow scenario (create, submit, deterministic settlement, an unauthorized
-rollback attempt), verify every transaction reached FINALIZED with the expected
-on-chain state, prove byte-for-byte sha256 identity between the local source and
-the deployed code returned by gen_getContractCode, and write the evidence to
+escrow scenario (create, submit, withdraw_submission back to OPEN, resubmit,
+deterministic settlement, payout withdrawal, and an unauthorized rollback
+attempt), verify every transaction reached FINALIZED with the expected on-chain
+state, prove byte-for-byte sha256 identity between the local source and the
+deployed code returned by gen_getContractCode, and write the evidence to
 evidence/studionet_deployment.json.
 
 Private key and token are read only from this project's own .env. They are never
@@ -41,6 +42,7 @@ MANIFEST = (
     "suite for the module."
 )
 DELIVERABLE_URL = "https://example.com/deliverable/settlement-module"
+RESUBMIT_URL = "https://example.com/deliverable/settlement-module-fixed"
 ESCROW_AMOUNT = 1_000_000
 MIN_PASS = 75
 PASS_SCORE = 90
@@ -233,19 +235,53 @@ def run_scenario():
             worker,
         )
     )
+    submitted = read_view(client, address, "get_bounty", [bounty_id], sponsor)
 
-    # 3. Sponsor settles deterministically with a passing score.
-    settle_tx = drive_write(
-        client,
-        address,
-        "approve_deterministic_settlement",
-        [bounty_id, PASS_SCORE, "Meets rubric and keyword bar"],
-        sponsor,
+    # 3. Worker withdraws the submission. This clears the URL and returns the
+    #    bounty to OPEN, proving the SUBMITTED deadlock exit on chain.
+    transactions.append(
+        drive_write(
+            client, address, "withdraw_submission", [bounty_id], worker
+        )
     )
-    transactions.append(settle_tx)
+    reopened = read_view(client, address, "get_bounty", [bounty_id], sponsor)
 
-    # 4. Expected rollback: an unauthorized account tries to submit on a fresh
-    #    bounty. The transaction finalizes but must leave that bounty OPEN.
+    # 4. Worker submits a corrected deliverable again.
+    transactions.append(
+        drive_write(
+            client,
+            address,
+            "submit_deliverable",
+            [bounty_id, RESUBMIT_URL, MANIFEST],
+            worker,
+        )
+    )
+
+    # 5. Sponsor settles deterministically with a passing score.
+    transactions.append(
+        drive_write(
+            client,
+            address,
+            "approve_deterministic_settlement",
+            [bounty_id, PASS_SCORE, "Meets rubric and keyword bar"],
+            sponsor,
+        )
+    )
+    worker_claim_earned = to_int(
+        read_view(client, address, "get_claimable_payout", [worker.address], sponsor)
+    )
+
+    # 6. Worker withdraws the accrued payout from the internal ledger.
+    transactions.append(
+        drive_write(client, address, "withdraw_payout", [], worker)
+    )
+    worker_claim_after = to_int(
+        read_view(client, address, "get_claimable_payout", [worker.address], sponsor)
+    )
+
+    # 7. Expected rollback: an unauthorized account tries to withdraw the
+    #    submission of a fresh OPEN bounty. The transaction finalizes but must
+    #    leave that bounty OPEN and unchanged (wrong caller and wrong status).
     transactions.append(
         drive_write(
             client,
@@ -262,19 +298,18 @@ def run_scenario():
     unauthorized_tx = drive_write(
         client,
         address,
-        "submit_deliverable",
-        [second_id, DELIVERABLE_URL, MANIFEST],
+        "withdraw_submission",
+        [second_id],
         charlie,
     )
-    unauthorized_tx["expected"] = "no state change (wrong caller)"
+    unauthorized_tx["expected"] = (
+        "no state change (wrong caller, and bounty is OPEN not SUBMITTED)"
+    )
     transactions.append(unauthorized_tx)
     second_bounty_after = read_view(client, address, "get_bounty", [second_id], sponsor)
 
     # Final state reads for the settled bounty.
     settled = read_view(client, address, "get_bounty", [bounty_id], sponsor)
-    worker_claim = to_int(
-        read_view(client, address, "get_claimable_payout", [worker.address], sponsor)
-    )
     summary = read_view(client, address, "get_escrow_summary", [], sponsor)
 
     chain_code = fetch_contract_code(client, address)
@@ -284,10 +319,14 @@ def run_scenario():
     explorer = probe_explorer(deploy_tx)
 
     # Assertions. Anything weaker raises before evidence is finalized.
-    assert str(settled["status"]) == "SETTLED_PAID", settled
+    assert str(unwrap(submitted["status"])) == "SUBMITTED", submitted
+    assert str(unwrap(reopened["status"])) == "OPEN", reopened
+    assert str(unwrap(reopened["deliverable_url"])) == "", reopened
+    assert str(unwrap(settled["status"])) == "SETTLED_PAID", settled
     assert to_int(settled["achieved_score"]) == PASS_SCORE, settled
     assert to_int(settled["payout_released"]) == ESCROW_AMOUNT, settled
-    assert worker_claim == ESCROW_AMOUNT, worker_claim
+    assert worker_claim_earned == ESCROW_AMOUNT, worker_claim_earned
+    assert worker_claim_after == 0, worker_claim_after
     assert str(unwrap(second_bounty_after["status"])) == "OPEN", second_bounty_after
     assert all(t["reached_finalized"] for t in transactions), transactions
 
@@ -306,7 +345,10 @@ def run_scenario():
         "explorer_probe": explorer,
         "final_state": {
             "settled_bounty": settled,
-            "worker_claimable": worker_claim,
+            "withdraw_submission_reopened_status": unwrap(reopened["status"]),
+            "withdraw_submission_cleared_url": str(unwrap(reopened["deliverable_url"])) == "",
+            "worker_claimable_after_settle": worker_claim_earned,
+            "worker_claimable_after_withdraw": worker_claim_after,
             "escrow_summary": summary,
             "unauthorized_attempt_bounty_status": unwrap(
                 second_bounty_after["status"]
@@ -338,7 +380,8 @@ def main():
     print("chain_sha256:", result["chain_sha256"])
     print("sha256_identity:", result["sha256_identity"])
     print("explorer_probe:", result["explorer_probe"])
-    print("worker_claimable:", result["final_state"]["worker_claimable"])
+    print("worker_claimable_after_settle:", result["final_state"]["worker_claimable_after_settle"])
+    print("worker_claimable_after_withdraw:", result["final_state"]["worker_claimable_after_withdraw"])
     print("evidence_written:", str(EVIDENCE_PATH))
     if not result["sha256_identity"]:
         raise SystemExit("Deployed code does not match local source sha256")

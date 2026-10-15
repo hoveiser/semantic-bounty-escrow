@@ -45,20 +45,26 @@ def test_studionet_escrow_scenario():
     # Deployed code is byte-for-byte the local source.
     assert result["sha256_identity"] is True, result
 
-    # Deterministic settlement happy path paid the worker exactly one escrow.
-    settled = result["final_state"]["settled_bounty"]
+    # Deterministic settlement happy path paid the worker exactly one escrow,
+    # after the submission was withdrawn to OPEN and re-submitted.
+    final = result["final_state"]
+    settled = final["settled_bounty"]
+    assert final["withdraw_submission_reopened_status"] == "OPEN"
+    assert final["withdraw_submission_cleared_url"] is True
     assert settled["status"] == "SETTLED_PAID"
     assert int(settled["achieved_score"]) == 90
     assert int(settled["payout_released"]) == int(settled["escrow_amount"])
-    assert int(result["final_state"]["worker_claimable"]) == int(
+    assert int(final["worker_claimable_after_settle"]) == int(
         settled["escrow_amount"]
     )
+    # withdraw_payout moved the whole earned credit out of the ledger.
+    assert int(final["worker_claimable_after_withdraw"]) == 0
 
-    # An unauthorized submission finalized but changed nothing.
-    assert result["final_state"]["unauthorized_attempt_bounty_status"] == "OPEN"
+    # An unauthorized withdrawal attempt finalized but changed nothing.
+    assert final["unauthorized_attempt_bounty_status"] == "OPEN"
 
     # Accounting invariant from the summary view: exactly one bounty paid out and
     # one still locked, nothing double counted.
-    summary = result["final_state"]["escrow_summary"]
+    summary = final["escrow_summary"]
     assert summary["settled_paid"] == 1
     assert summary["total_payout_released"] == summary["total_escrow_locked"]

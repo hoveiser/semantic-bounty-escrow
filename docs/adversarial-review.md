@@ -6,7 +6,7 @@ fetched deliverable) is adversarial. Each finding is marked FIXED with the
 proof, or OPEN with the reason. Nothing here is a success-only summary.
 
 Scope of this review: `contracts/semantic_bounty_escrow.py`. Proof tests:
-`tests/test_bounty_escrow_direct.py` (27 direct-mode tests, all passing).
+`tests/test_bounty_escrow_direct.py` (44 direct-mode tests, all passing).
 
 ## 1. State machine table
 
@@ -16,33 +16,44 @@ Scope of this review: `contracts/semantic_bounty_escrow.py`. Proof tests:
 | OPEN | Escrowed, no deliverable | sponsor | reclaim_bounty | REFUNDED | credit sponsor escrow |
 | REJECTED | Deliverable scored below bar | worker | submit_deliverable | SUBMITTED | none (still locked) |
 | REJECTED | Deliverable scored below bar | sponsor | reclaim_bounty | REFUNDED | credit sponsor escrow |
+| SUBMITTED | Awaiting settlement | worker | withdraw_submission | OPEN | none (URL cleared) |
 | SUBMITTED | Awaiting settlement | sponsor | approve_deterministic_settlement | SETTLED_PAID or REJECTED | credit worker escrow on pass, none on reject |
 | SUBMITTED | Awaiting settlement | anyone | evaluate_deliverable_live | SETTLED_PAID or REJECTED | credit worker escrow on pass, none on reject |
 | SETTLED_PAID | Terminal, worker paid | none | none | none | already credited |
 | REFUNDED | Terminal, sponsor refunded | none | none | none | already credited |
 
 Reclaim and approve are blocked while a bounty is SUBMITTED, so the sponsor
-cannot rug a worker who is mid-review.
+cannot rug a worker who is mid-review. The worker, and only the worker, can pull
+a SUBMITTED bounty back to OPEN via `withdraw_submission`, which clears the
+deliverable URL. That exit removes the stale-URL / unresponsive-sponsor deadlock
+without handing the worker any funds: after withdrawal the worker may resubmit a
+fixed deliverable, and the sponsor may reclaim.
 
 ## 2. Liveness: no stuck funds
 
 - OPEN: recoverable by the sponsor at any time through `reclaim_bounty`.
 - REJECTED: recoverable by the sponsor through `reclaim_bounty`; re-submittable
   by the worker.
-- SUBMITTED: recoverable by the sponsor. The sponsor is deliberately blocked
-  from direct `reclaim_bounty` here (so it cannot abandon a pending review and
-  grab the money), but it always retains `approve_deterministic_settlement`,
-  which can move the bounty to REJECTED and then to REFUNDED. The worker is
-  never able to pull the sponsor's escrow while it is SUBMITTED, which is the
-  correct direction: it is the sponsor's money until earned.
+- SUBMITTED: no longer a one-sided wait. The assigned worker can call
+  `withdraw_submission` to move the bounty back to OPEN and clear the URL, which
+  re-enables a corrected resubmission or a sponsor `reclaim_bounty`. This closes
+  the deadlock that previously existed when the deliverable URL went down or the
+  sponsor stopped responding. The sponsor also still retains
+  `approve_deterministic_settlement`, which can move the bounty to REJECTED and
+  then to REFUNDED. `withdraw_submission` never moves funds; it only reopens the
+  lifecycle, so the worker cannot pull the sponsor's escrow while SUBMITTED, only
+  reset the review. Tested by `test_withdraw_submission_returns_to_open_and_clears_url`,
+  `test_withdraw_submission_then_resubmit`, `test_withdraw_submission_then_sponsor_reclaim`,
+  and the unauthorized/guard reverts.
 - No on-chain wall-clock deadline exists. This is an accepted design tradeoff:
-  both parties always hold a unilateral exit that is guarded by role and status,
-  so funds are not permanently locked. There is no time window, so the project
-  rule about a floor and ceiling on every time window is not applicable.
+  every non-terminal state now has a unilateral exit for the party that needs it
+  (sponsor reclaim on OPEN/REJECTED, worker withdraw_submission on SUBMITTED), so
+  funds are not permanently locked. There is no time window, so the project rule
+  about a floor and ceiling on every time window is not applicable.
 
-Verdict: FIXED. Every terminal fund movement is reachable only through a
-role-gated, status-gated method, and no status is a dead end for the owner of
-the funds.
+Verdict: FIXED. The SUBMITTED deadlock is removed by `withdraw_submission`. Every
+status is now leaveable by the party who can unlock funds, and no status is a
+dead end.
 
 ## 3. Race conditions between competing transitions
 
@@ -111,14 +122,25 @@ Verdict: OPEN as a design limitation, documented, not a code defect.
 - evaluate_deliverable_live: status must be SUBMITTED; score clamped to 0 to 100;
   keywords re-checked against the actually fetched text. Tested.
 - withdraw_payout: reverts on a zero balance. Tested.
+- withdraw_submission: sender must equal the assigned worker; status must be
+  SUBMITTED; resets to OPEN and clears the URL. Tested.
 
-Verdict: FIXED for the fields above.
+Verdict: FIXED for the fields and access guards above.
 
-OPEN: There are no upper length caps on `title`, `requirements_rubric`,
-`required_keywords_csv`, `deliverable_url`, `deliverable_manifest` or `summary`.
-The task specification did not request caps, so none were added, but very large
-strings increase storage and gas and can bloat the prompt. A production deployer
-should impose byte limits at the boundary. Flagged honestly as unmitigated.
+FIXED (was OPEN): every free-text and numeric input now has a hard upper bound to
+prevent storage bloat and prompt-injection payloads. `title` is 1..120 chars,
+`requirements_rubric` is 1..2000 chars, `required_keywords_csv` is at most 500
+chars with at most 20 non-empty tokens, `deliverable_url` is 8..512 chars with no
+whitespace and a mandatory http/https scheme, `deliverable_manifest` is 1..4000
+chars, `summary` is 1..500 chars, and `escrow_amount` is bounded to
+`0 < escrow_amount <= 10**30`. Values are stripped and the keyword CSV is
+normalized. Every bound breach reverts with a specific message rather than
+clamping, and each is covered by a dedicated direct test
+(`test_create_rejects_oversized_*`, `test_create_rejects_too_many_keywords`,
+`test_create_rejects_empty_keyword_token`, `test_create_rejects_oversized_escrow`,
+`test_create_accepts_escrow_at_ceiling`, `test_submit_rejects_url_with_whitespace`,
+`test_submit_rejects_oversized_url`, `test_submit_rejects_oversized_manifest`,
+`test_settlement_rejects_empty_summary`, `test_settlement_rejects_oversized_summary`).
 
 ## 6. Consensus safety (GenLayer)
 
@@ -130,6 +152,10 @@ should impose byte limits at the boundary. Flagged honestly as unmitigated.
   verdict and the below/at-or-above `min_pass_score` band).
 - Storage is never read inside the non-deterministic block. Every field the
   evaluator needs is snapshotted into plain Python locals first.
+- The fetched deliverable text is truncated to a deterministic window of the
+  first 8000 characters (`FETCH_WINDOW`) before it is passed to `exec_prompt`, so
+  an oversized page cannot bloat or break validator prompts, and the stored
+  `audit_summary` is truncated to 500 characters on both settlement paths.
 - External evidence is re-fetched independently by each validator rather than
   trusting a self-reported claim, because the live path renders `deliverable_url`
   itself instead of using the submitted manifest.
@@ -157,26 +183,37 @@ injection-proof here.
 ## 7. Test coverage summary
 
 Negative guard tests: self-dealing sponsor equals worker; low and out-of-range
-scores; zero escrow; empty title; invalid address; unauthorized submitter;
-missing-keyword reject; bad url; empty manifest; sponsor-only settle; blocked
-reclaim on SUBMITTED and SETTLED_PAID; withdraw on empty ledger. Scenario and
-invariant tests: two settlement paths, live evaluation pass/low-score/
-missing-keyword, resubmission after reject, double-settlement block, summary and
-actor indexes, withdraw. All pass under gltest direct mode.
+scores; zero and over-ceiling escrow; empty and oversized title; oversized rubric;
+oversized and over-count and empty-token keyword CSV; invalid address; bad and
+oversized and whitespace URL; empty and oversized manifest and summary;
+unauthorized submitter; unauthorized submission withdrawal; withdrawal on a
+non-submitted bounty; missing-keyword reject; sponsor-only settle; blocked reclaim
+on SUBMITTED and SETTLED_PAID; withdraw on empty ledger. Scenario and invariant
+tests: two settlement paths, live evaluation pass/low-score/missing-keyword,
+resubmission after reject, withdraw_submission back to OPEN then resubmit or
+reclaim, double-settlement block, summary and actor indexes, withdraw. All 44 pass
+under gltest direct mode.
 
 ## Findings list
 
 - FIXED: state machine has no dead-end for the fund owner (role + status
-  guarded exits).
+  guarded exits). The SUBMITTED deadlock is closed by worker-only
+  `withdraw_submission`, which resets to OPEN and clears the URL.
+- FIXED: every free-text and numeric input has an enforced upper bound (title,
+  rubric, keyword CSV length and count and non-empty tokens, URL length and no
+  whitespace, manifest, summary) plus `0 < escrow_amount <= 10**30`. Proven by
+  dedicated direct tests.
+- FIXED: live evaluation truncates the fetched page to a deterministic 8000-char
+  window before the prompt, and clamps stored `audit_summary` to 500 chars.
 - FIXED: no double credit, no double withdraw, no pay-plus-refund, second settle
   blocked. Proven by direct tests.
 - FIXED: transfer amount is not an LLM number; storage is not read inside the
   non-deterministic block; keyword presence recomputed from fetched text.
 - OPEN: contract is a ledger, not a GLX vault; integrator must custody funds.
   By spec, documented.
-- OPEN: no upper length caps on free-text fields. By spec omission, flagged.
-- OPEN: evaluate path does not auto-refund on unreachable evidence; manual
-  sponsor exit only.
+- OPEN: evaluate path does not auto-refund on unreachable evidence; the worker
+  can now `withdraw_submission` to reopen and the sponsor can reclaim, but the
+  live path itself still reverts rather than failing closed to refund.
 - OPEN: validator agreement under a hostile page is not proven by direct-mode
   leader-only tests; requires live studionet coverage before claiming full
   injection resistance.

@@ -10,9 +10,9 @@ gate, the rubric settlement decision, and the payout accounting.
 
 - Runner: pinned `py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6`
 - Network: `studionet` (chain id 61999)
-- Deployed contract address: `0x6C972C4AEC5872E4089bc20849218B6402cecf02`
-- Source sha256 (local and on-chain, byte-for-byte identical):
-  `b56bf397f2165c7e3c76b91bbdaa7db50cc83b5dca81c290b57a9fc53a471fb3`
+- Deployed contract address: `0x0b15E693cbeDEBf921bd59FD95213F9293CE3bCf`
+- Source sha256 (local, on-chain and GitHub remote, byte-for-byte identical):
+  `2ff928759b24db84f4f7b98425be4c34e141d55a0c09e59f3ea33461879f226d`
 
 ## Why GenLayer
 
@@ -27,13 +27,17 @@ appealable state transition and a fund-moving effect.
 | Status | Meaning | Exits |
 |--------|---------|-------|
 | `OPEN` | Escrowed, no deliverable yet | worker `submit_deliverable` -> `SUBMITTED`; sponsor `reclaim_bounty` -> `REFUNDED` |
-| `SUBMITTED` | A deliverable awaits settlement | sponsor `approve_deterministic_settlement` or anyone `evaluate_deliverable_live` -> `SETTLED_PAID` or `REJECTED` |
+| `SUBMITTED` | A deliverable awaits settlement | worker `withdraw_submission` -> `OPEN` (URL cleared); sponsor `approve_deterministic_settlement` or anyone `evaluate_deliverable_live` -> `SETTLED_PAID` or `REJECTED` |
 | `REJECTED` | Scored below the bar, escrow still locked | worker `submit_deliverable` -> `SUBMITTED` (resubmission); sponsor `reclaim_bounty` -> `REFUNDED` |
 | `SETTLED_PAID` | Terminal, worker credited | none |
 | `REFUNDED` | Terminal, sponsor credited | none |
 
 While a bounty is `SUBMITTED`, the sponsor is deliberately blocked from
-`reclaim_bounty`, so it cannot grab the money out from under a pending review.
+`reclaim_bounty`, so it cannot grab the money out from under a pending review. If
+the deliverable URL goes down or settlement stalls, the assigned worker (and only
+the worker) can call `withdraw_submission` to return the bounty to `OPEN` and clear
+the URL. That is the deadlock exit: after it the worker may resubmit a fixed
+deliverable, and the sponsor may reclaim. `withdraw_submission` moves no funds.
 
 ## Two-stage verification
 
@@ -55,6 +59,7 @@ While a bounty is `SUBMITTED`, the sponsor is deliberately blocked from
 Writes:
 - `create_bounty(worker, title, requirements_rubric, required_keywords_csv, min_pass_score, escrow_amount) -> bounty_id`
 - `submit_deliverable(bounty_id, deliverable_url, deliverable_manifest)`
+- `withdraw_submission(bounty_id)` (worker only, `SUBMITTED` -> `OPEN`)
 - `approve_deterministic_settlement(bounty_id, verified_score, summary) -> verdict`
 - `evaluate_deliverable_live(bounty_id) -> verdict`
 - `reclaim_bounty(bounty_id) -> reclaimed_amount`
@@ -76,24 +81,46 @@ that rejects further credits. `withdraw_payout` zeroes the ledger balance and
 reverts on an empty one. See `docs/adversarial-review.md` for the full attack
 analysis and the tests that prove each guard.
 
+## Input hygiene bounds
+
+Every free-text and numeric input is bounded to blunt storage bloat and
+prompt-injection payloads. Violations revert with a specific message rather than
+being clamped:
+
+- `title`: 1..120 characters
+- `requirements_rubric`: 1..2000 characters
+- `required_keywords_csv`: at most 500 characters, at most 20 non-empty tokens
+- `deliverable_url`: 8..512 characters, must start with `http://` or `https://`, no whitespace
+- `deliverable_manifest`: 1..4000 characters
+- `summary`: 1..500 characters
+- `escrow_amount`: `0 < escrow_amount <= 10**30`
+
+In `evaluate_deliverable_live`, the fetched page text is truncated to a
+deterministic 8000-character window before it enters the prompt, and the stored
+`audit_summary` is clipped to 500 characters on both settlement paths.
+
 ## Verification status
 
 - `genvm-lint check`: 0 errors (the only message is an informational note that a
   newer runner exists; the pinned hash is kept deliberately as required).
-- Direct-mode tests: `tests/test_bounty_escrow_direct.py`, 27 tests, all passing.
+- Direct-mode tests: `tests/test_bounty_escrow_direct.py`, 44 tests, all passing.
 - Studionet integration test: `tests/test_bounty_escrow_integration.py`, passing
   against the live network (run with `STUDIONET_RUN=1 gltest ...`).
 
-Studionet transaction hashes from the recorded run (all `FINALIZED`):
+Studionet transaction hashes from the recorded run (all `FINALIZED`), contract
+`0x0b15E693cbeDEBf921bd59FD95213F9293CE3bCf`:
 
 | Step | Transaction |
 |------|-------------|
-| deploy | `0x66f6bcd1527e6732aaa401bf02a2b17c1f50159d0ec020e451ad02aa9ec564b7` |
-| create_bounty | `0x7e5745de0a40eb790579aa972d1e2338e82c5e3fc5e54c468791affa44c6e0d6` |
-| submit_deliverable | `0x18cda68c7d1a3ff4d64b7e264894e15d2a6d07ca45d24db925b82cce15325976` |
-| approve_deterministic_settlement | `0x2f88647b486d75df996c5e2625fe0c951291d0bb49d5f8736f405b4d0406f7a5` |
-| create_bounty (second) | `0x7696ef0c1ab41a9e133d4d7dffcb8a2f520d7b0774676f76b6c575a087949354` |
-| submit_deliverable (unauthorized, expected no-op) | `0x49cc93ee23d45b63a9cbd9977820b4e6833fd70bd601cac1ec1609ac64678a35` |
+| deploy | `0xba5c680b6cd2f78840da4ce6f4ba6760d184c8f0e908421d5f78b5c450783f86` |
+| create_bounty | `0xdbfe18f349859481e7658b253987a4227540a0ffc761afae015c2f4887e09af6` |
+| submit_deliverable | `0xc34d4dd7f851d99cc28200f3d02a7765707d15eae3aad93114204aa09dd3a259` |
+| withdraw_submission (SUBMITTED -> OPEN) | `0x2a7d39a13f8155e1433fc11827e6a50d08a6dfba85f88fbc33e8f731224449f9` |
+| submit_deliverable (resubmit) | `0x1d480da609c15614f47d1a4d32faec1571d9d715323c654443ed3a73f008b3d6` |
+| approve_deterministic_settlement | `0xb7c6ac2ebba59ccc18213f126fc421638bcfa3e91250ea70254880c52ec6153d` |
+| withdraw_payout | `0xee952c1ca2d2d02203f99f67e9bc2de64f919d411767b335c42dfb3fa3cd4ed9` |
+| create_bounty (second) | `0x739977567c771ce70f1f37814a6e58b0a248dcd5354fac01ce62e0beb0a61cfe` |
+| withdraw_submission (unauthorized, expected no-op) | `0x084664088dd2078e7b0da09995f038cda94f2c81323dbd9d730a7cb9856dd997` |
 
 The full machine-readable record, including final state and the sha256 identity
 check, is in `evidence/studionet_deployment.json`.
@@ -122,12 +149,13 @@ an explorer-confirmed result.
   path. Use `evaluate_deliverable_live` when the settlement decision must be
   validator-consensed rather than sponsor-decided.
 - There is no on-chain deadline. Recovery relies on role- and status-gated exits
-  (sponsor `reclaim_bounty`, or reject-then-reclaim), not on a timer.
+  (sponsor `reclaim_bounty`, worker `withdraw_submission`, or reject-then-reclaim),
+  not on a timer. The `SUBMITTED` deadlock is closed by `withdraw_submission`.
 - `evaluate_deliverable_live` reverts on unreachable evidence instead of
-  auto-refunding; the sponsor keeps a manual refund exit, but the live path does
-  not fail closed to refund by itself.
-- Free-text fields have no upper length caps. Deployers should add byte limits at
-  the boundary for production.
+  auto-refunding; the worker can `withdraw_submission` to reopen and the sponsor
+  can then reclaim, but the live path does not fail closed to refund by itself.
+- Free-text and numeric inputs are hard-bounded at the contract level (see Input
+  hygiene bounds). Deployers should still validate transport-level sizes.
 - Direct-mode tests run only the leader path. They prove the state machine and
   guards, not validator agreement under a hostile page; that requires live
   studionet runs and is not fully covered for adversarial content here.
@@ -136,7 +164,7 @@ an explorer-confirmed result.
 
 ```
 contracts/semantic_bounty_escrow.py      the primitive
-tests/test_bounty_escrow_direct.py       27 direct-mode tests
+tests/test_bounty_escrow_direct.py       44 direct-mode tests
 tests/test_bounty_escrow_integration.py  opt-in live studionet test
 scripts/deploy_studionet.py              deploy, drive, verify, write evidence
 docs/adversarial-review.md               attack analysis and findings

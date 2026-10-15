@@ -4,14 +4,14 @@
   "explorer_url": "https://genlayer-explorer.vercel.app",
   "chain_id": 61999,
   "sponsor_address": "0x3de43AA2f7162c80af98abe78222aE0Cdf83c506",
-  "worker_address": "0x0d8f2D2d77948F2993cE034625c700F9E4C7de44",
-  "contract_address": "0x6C972C4AEC5872E4089bc20849218B6402cecf02",
-  "deploy_tx": "0x66f6bcd1527e6732aaa401bf02a2b17c1f50159d0ec020e451ad02aa9ec564b7",
-  "local_sha256": "b56bf397f2165c7e3c76b91bbdaa7db50cc83b5dca81c290b57a9fc53a471fb3",
-  "chain_sha256": "b56bf397f2165c7e3c76b91bbdaa7db50cc83b5dca81c290b57a9fc53a471fb3",
+  "worker_address": "0x8E57c835b5b73770328fFd62e69E13A6F7247f15",
+  "contract_address": "0x0b15E693cbeDEBf921bd59FD95213F9293CE3bCf",
+  "deploy_tx": "0xba5c680b6cd2f78840da4ce6f4ba6760d184c8f0e908421d5f78b5c450783f86",
+  "local_sha256": "2ff928759b24db84f4f7b98425be4c34e141d55a0c09e59f3ea33461879f226d",
+  "chain_sha256": "2ff928759b24db84f4f7b98425be4c34e141d55a0c09e59f3ea33461879f226d",
   "sha256_identity": true,
   "explorer_probe": {
-    "url": "https://genlayer-explorer.vercel.app/api/transactions/0x66f6bcd1527e6732aaa401bf02a2b17c1f50159d0ec020e451ad02aa9ec564b7",
+    "url": "https://genlayer-explorer.vercel.app/api/transactions/0xba5c680b6cd2f78840da4ce6f4ba6760d184c8f0e908421d5f78b5c450783f86",
     "ok": false,
     "error": "HTTP 503"
   },
@@ -20,7 +20,7 @@
       "achieved_score": 90,
       "audit_summary": "Meets rubric and keyword bar",
       "bounty_id": 1,
-      "deliverable_url": "https://example.com/deliverable/settlement-module",
+      "deliverable_url": "https://example.com/deliverable/settlement-module-fixed",
       "escrow_amount": 1000000,
       "min_pass_score": 75,
       "payout_released": 1000000,
@@ -29,9 +29,12 @@
       "sponsor": "0x3de43AA2f7162c80af98abe78222aE0Cdf83c506",
       "status": "SETTLED_PAID",
       "title": "Implement settlement module",
-      "worker": "0x0d8f2D2d77948F2993cE034625c700F9E4C7de44"
+      "worker": "0x8E57c835b5b73770328fFd62e69E13A6F7247f15"
     },
-    "worker_claimable": 1000000,
+    "withdraw_submission_reopened_status": "OPEN",
+    "withdraw_submission_cleared_url": true,
+    "worker_claimable_after_settle": 1000000,
+    "worker_claimable_after_withdraw": 0,
     "escrow_summary": {
       "open": 1,
       "refunded": 0,
@@ -47,40 +50,58 @@
   "transactions": [
     {
       "method": "deploy",
-      "tx_hash": "0x66f6bcd1527e6732aaa401bf02a2b17c1f50159d0ec020e451ad02aa9ec564b7",
+      "tx_hash": "0xba5c680b6cd2f78840da4ce6f4ba6760d184c8f0e908421d5f78b5c450783f86",
       "status": "FINALIZED",
       "reached_finalized": true
     },
     {
       "method": "create_bounty",
-      "tx_hash": "0x7e5745de0a40eb790579aa972d1e2338e82c5e3fc5e54c468791affa44c6e0d6",
+      "tx_hash": "0xdbfe18f349859481e7658b253987a4227540a0ffc761afae015c2f4887e09af6",
       "status": "FINALIZED",
       "reached_finalized": true
     },
     {
       "method": "submit_deliverable",
-      "tx_hash": "0x18cda68c7d1a3ff4d64b7e264894e15d2a6d07ca45d24db925b82cce15325976",
+      "tx_hash": "0xc34d4dd7f851d99cc28200f3d02a7765707d15eae3aad93114204aa09dd3a259",
+      "status": "FINALIZED",
+      "reached_finalized": true
+    },
+    {
+      "method": "withdraw_submission",
+      "tx_hash": "0x2a7d39a13f8155e1433fc11827e6a50d08a6dfba85f88fbc33e8f731224449f9",
+      "status": "FINALIZED",
+      "reached_finalized": true
+    },
+    {
+      "method": "submit_deliverable",
+      "tx_hash": "0x1d480da609c15614f47d1a4d32faec1571d9d715323c654443ed3a73f008b3d6",
       "status": "FINALIZED",
       "reached_finalized": true
     },
     {
       "method": "approve_deterministic_settlement",
-      "tx_hash": "0x2f88647b486d75df996c5e2625fe0c951291d0bb49d5f8736f405b4d0406f7a5",
+      "tx_hash": "0xb7c6ac2ebba59ccc18213f126fc421638bcfa3e91250ea70254880c52ec6153d",
+      "status": "FINALIZED",
+      "reached_finalized": true
+    },
+    {
+      "method": "withdraw_payout",
+      "tx_hash": "0xee952c1ca2d2d02203f99f67e9bc2de64f919d411767b335c42dfb3fa3cd4ed9",
       "status": "FINALIZED",
       "reached_finalized": true
     },
     {
       "method": "create_bounty",
-      "tx_hash": "0x7696ef0c1ab41a9e133d4d7dffcb8a2f520d7b0774676f76b6c575a087949354",
+      "tx_hash": "0x739977567c771ce70f1f37814a6e58b0a248dcd5354fac01ce62e0beb0a61cfe",
       "status": "FINALIZED",
       "reached_finalized": true
     },
     {
-      "method": "submit_deliverable",
-      "tx_hash": "0x49cc93ee23d45b63a9cbd9977820b4e6833fd70bd601cac1ec1609ac64678a35",
+      "method": "withdraw_submission",
+      "tx_hash": "0x084664088dd2078e7b0da09995f038cda94f2c81323dbd9d730a7cb9856dd997",
       "status": "FINALIZED",
       "reached_finalized": true,
-      "expected": "no state change (wrong caller)"
+      "expected": "no state change (wrong caller, and bounty is OPEN not SUBMITTED)"
     }
   ]
 }

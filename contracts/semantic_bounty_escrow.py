@@ -38,6 +38,31 @@ STATUS_REFUNDED = "REFUNDED"
 
 TERMINAL_STATUSES = (STATUS_SETTLED_PAID, STATUS_REFUNDED)
 
+# ---------------------------------------------------------------------------
+# String length and input hygiene bounds. These cap storage growth, limit the
+# size of any prompt built from user input, and blunt prompt-injection payloads.
+# ---------------------------------------------------------------------------
+MIN_TITLE_LEN = 1
+MAX_TITLE_LEN = 120
+MIN_RUBRIC_LEN = 1
+MAX_RUBRIC_LEN = 2000
+MAX_KEYWORDS_CSV_LEN = 500
+MAX_KEYWORD_COUNT = 20
+MIN_URL_LEN = 8
+MAX_URL_LEN = 512
+MIN_MANIFEST_LEN = 1
+MAX_MANIFEST_LEN = 4000
+MIN_SUMMARY_LEN = 1
+MAX_SUMMARY_LEN = 500
+MIN_ESCROW_AMOUNT = 1
+MAX_ESCROW_AMOUNT = u256(10) ** u256(30)
+
+# Deterministic window the live evaluator feeds to the prompt so an oversized
+# page cannot break validator prompts or blow up storage.
+FETCH_WINDOW = 8000
+
+_WHITESPACE_CHARS = " \t\n\r\v\f"
+
 
 @allow_storage
 @dataclass
@@ -68,6 +93,73 @@ def _normalize_address(account: str) -> Address:
         return Address(text)
     except Exception:
         raise gl.vm.UserError(f"{ERROR_EXPECTED} Invalid address: {text}")
+
+
+def _require_bounded_text(value, field: str, min_len: int, max_len: int) -> str:
+    """Strip surrounding whitespace and enforce an inclusive length window."""
+    if value is None:
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} {field} must not be empty")
+    text = str(value).strip()
+    if len(text) < min_len:
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} {field} must not be empty")
+    if len(text) > max_len:
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} {field} exceeds maximum length {max_len}"
+        )
+    return text
+
+
+def _require_url(value, field: str) -> str:
+    """Validate a deliverable URL: scheme, length and no whitespace injection."""
+    if value is None:
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} {field} must not be empty")
+    text = str(value).strip()
+    if not (text.startswith("http://") or text.startswith("https://")):
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} {field} must start with http:// or https://"
+        )
+    if len(text) < MIN_URL_LEN or len(text) > MAX_URL_LEN:
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} {field} length must be between {MIN_URL_LEN} "
+            f"and {MAX_URL_LEN}"
+        )
+    for ch in _WHITESPACE_CHARS:
+        if ch in text:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} {field} must not contain whitespace")
+    return text
+
+
+def _safe_truncate(text: str, max_len: int) -> str:
+    """Deterministically clip a string to a hard maximum length."""
+    if len(text) > max_len:
+        return text[:max_len]
+    return text
+
+
+def _validate_required_keywords(required_csv) -> str:
+    """Validate the mandatory keyword list and return the normalized CSV."""
+    text = "" if required_csv is None else str(required_csv)
+    if len(text) > MAX_KEYWORDS_CSV_LEN:
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} required_keywords_csv exceeds maximum length "
+            f"{MAX_KEYWORDS_CSV_LEN}"
+        )
+    count = 0
+    kept = []
+    for raw in text.split(","):
+        token = raw.strip()
+        if len(token) == 0:
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} required_keywords_csv must not contain empty tokens"
+            )
+        count += 1
+        kept.append(token)
+    if count > MAX_KEYWORD_COUNT:
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} required_keywords_csv exceeds maximum token count "
+            f"{MAX_KEYWORD_COUNT}"
+        )
+    return ",".join(kept)
 
 
 def _split_keywords(required_csv: str) -> list:
@@ -156,10 +248,13 @@ class SemanticBountyEscrow(gl.Contract):
         sponsor = gl.message.sender_address
         worker_addr = _normalize_address(worker)
 
-        if title is None or len(str(title).strip()) == 0:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Title must not be empty")
-        if requirements_rubric is None or len(str(requirements_rubric).strip()) == 0:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} Requirements rubric must not be empty")
+        title_clean = _require_bounded_text(
+            title, "title", MIN_TITLE_LEN, MAX_TITLE_LEN
+        )
+        rubric_clean = _require_bounded_text(
+            requirements_rubric, "requirements_rubric", MIN_RUBRIC_LEN, MAX_RUBRIC_LEN
+        )
+        keywords_clean = _validate_required_keywords(required_keywords_csv)
 
         score_floor = u256(50)
         score_ceiling = u256(100)
@@ -169,6 +264,10 @@ class SemanticBountyEscrow(gl.Contract):
             )
         if escrow_amount <= u256(0):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} escrow_amount must be greater than 0")
+        if escrow_amount > MAX_ESCROW_AMOUNT:
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} escrow_amount exceeds maximum {int(MAX_ESCROW_AMOUNT)}"
+            )
         if worker_addr == sponsor:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} worker must differ from sponsor")
 
@@ -179,9 +278,9 @@ class SemanticBountyEscrow(gl.Contract):
             bounty_id=bounty_id,
             sponsor=sponsor,
             worker=worker_addr,
-            title=str(title),
-            requirements_rubric=str(requirements_rubric),
-            required_keywords_csv=str(required_keywords_csv),
+            title=title_clean,
+            requirements_rubric=rubric_clean,
+            required_keywords_csv=keywords_clean,
             min_pass_score=u256(min_pass_score),
             escrow_amount=u256(escrow_amount),
             deliverable_url="",
@@ -212,14 +311,10 @@ class SemanticBountyEscrow(gl.Contract):
                 f"{ERROR_EXPECTED} Bounty must be OPEN or REJECTED to submit"
             )
 
-        url = str(deliverable_url)
-        if not (url.startswith("http://") or url.startswith("https://")):
-            raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} deliverable_url must start with http:// or https://"
-            )
-        manifest = str(deliverable_manifest)
-        if len(manifest.strip()) == 0:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} deliverable_manifest must not be empty")
+        url = _require_url(deliverable_url, "deliverable_url")
+        manifest = _require_bounded_text(
+            deliverable_manifest, "deliverable_manifest", MIN_MANIFEST_LEN, MAX_MANIFEST_LEN
+        )
 
         missing = _missing_keywords(bounty.required_keywords_csv, manifest)
         if len(missing) > 0:
@@ -249,7 +344,8 @@ class SemanticBountyEscrow(gl.Contract):
         if verified_score < u256(0) or verified_score > u256(100):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} verified_score must be between 0 and 100")
 
-        audit = str(summary)
+        audit = _require_bounded_text(summary, "summary", MIN_SUMMARY_LEN, MAX_SUMMARY_LEN)
+        audit = _safe_truncate(audit, MAX_SUMMARY_LEN)
         if verified_score >= bounty.min_pass_score:
             bounty.status = STATUS_SETTLED_PAID
             bounty.achieved_score = u256(verified_score)
@@ -292,6 +388,10 @@ class SemanticBountyEscrow(gl.Contract):
         def run_evaluation() -> dict:
             page = gl.nondet.web.render(url_local, mode="text")
             page_text = str(page)
+            # Deterministic window: cap the fetched text before it enters the
+            # prompt so an oversized page cannot bloat or break validator prompts.
+            if len(page_text) > FETCH_WINDOW:
+                page_text = page_text[:FETCH_WINDOW]
             prompt = (
                 "You are a strict technical deliverable evaluator. "
                 "Evaluate the deliverable against the rubric.\n"
@@ -378,7 +478,7 @@ class SemanticBountyEscrow(gl.Contract):
             bounty.status = STATUS_SETTLED_PAID
             bounty.achieved_score = score_final
             bounty.payout_released = escrow_local
-            bounty.audit_summary = summary_final
+            bounty.audit_summary = _safe_truncate(summary_final, MAX_SUMMARY_LEN)
             self.bounties[bounty_id_local] = bounty
             current = self.claimable_payouts.get_or_insert_default(worker_local)
             self.claimable_payouts[worker_local] = u256(current + escrow_local)
@@ -387,9 +487,35 @@ class SemanticBountyEscrow(gl.Contract):
             bounty.status = STATUS_REJECTED
             bounty.achieved_score = score_final
             bounty.payout_released = u256(0)
-            bounty.audit_summary = summary_final
+            bounty.audit_summary = _safe_truncate(summary_final, MAX_SUMMARY_LEN)
             self.bounties[bounty_id_local] = bounty
             return STATUS_REJECTED
+
+    @gl.public.write
+    def withdraw_submission(self, bounty_id: u256) -> None:
+        """Worker pulls back a SUBMITTED deliverable, clearing the URL.
+
+        This removes the SUBMITTED deadlock: if the deliverable URL is dead or
+        settlement is stalled, the worker can return the bounty to OPEN, which
+        re-enables both a corrected resubmission and a sponsor reclaim.
+        """
+        sender = gl.message.sender_address
+        if bounty_id not in self.bounties:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} Bounty does not exist")
+
+        bounty = self.bounties[bounty_id]
+        if sender != bounty.worker:
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} Only the assigned worker may withdraw a submission"
+            )
+        if bounty.status != STATUS_SUBMITTED:
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} Only a SUBMITTED bounty may have its submission withdrawn"
+            )
+
+        bounty.deliverable_url = ""
+        bounty.status = STATUS_OPEN
+        self.bounties[bounty_id] = bounty
 
     @gl.public.write
     def reclaim_bounty(self, bounty_id: u256) -> u256:

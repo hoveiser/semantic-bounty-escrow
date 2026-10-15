@@ -22,6 +22,18 @@ GOOD_MANIFEST = (
 )
 GOOD_URL = "https://example.com/deliverable/1"
 
+# Inputs that deliberately breach the hardening bounds.
+OVERSIZED_TITLE = "t" * 121
+OVERSIZED_RUBRIC = "r" * 2001
+OVERSIZED_KEYWORDS_CSV = "k" * 501
+TOO_MANY_KEYWORDS = ",".join(f"kw{i}" for i in range(21))
+EMPTY_KEYWORD_TOKEN = "settlement,escrow,,test"
+OVERSIZED_URL = "https://" + "u" * 510
+WHITESPACE_URL = "https://exa mple.com/d"
+OVERSIZED_MANIFEST = ("settlement escrow test " + "x" * 4000)
+OVERSIZED_SUMMARY = "s" * 501
+MAX_ESCROW = 10 ** 30
+
 
 def _addr(account) -> str:
     """Return a hex address string from a direct-mode test address (raw bytes)."""
@@ -96,7 +108,7 @@ def test_create_rejects_zero_escrow(direct_vm, direct_deploy, direct_alice, dire
 def test_create_rejects_empty_title(direct_vm, direct_deploy, direct_alice, direct_bob):
     contract = direct_deploy(CONTRACT)
     direct_vm.sender = direct_alice
-    with direct_vm.expect_revert("Title must not be empty"):
+    with direct_vm.expect_revert("title must not be empty"):
         contract.create_bounty(_addr(direct_bob), "   ", RUBRIC, KEYWORDS, 75, 1000)
 
 
@@ -377,3 +389,186 @@ def test_escrow_summary_and_actor_indexes(direct_vm, direct_deploy, direct_alice
     worker_view = contract.get_actor_bounties(_addr(direct_bob))
     assert sponsor_view["sponsor"] == [1]
     assert worker_view["worker"] == [1]
+
+
+# ---------------------------------------------------------------------------
+# withdraw_submission: breaks the SUBMITTED deadlock
+# ---------------------------------------------------------------------------
+
+
+def test_withdraw_submission_returns_to_open_and_clears_url(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract, bounty_id = _create(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _submit(direct_vm, contract, direct_bob)
+    assert contract.get_bounty(bounty_id)["status"] == "SUBMITTED"
+    direct_vm.sender = direct_bob
+    contract.withdraw_submission(bounty_id)
+    stored = contract.get_bounty(bounty_id)
+    assert stored["status"] == "OPEN"
+    assert stored["deliverable_url"] == ""
+
+
+def test_withdraw_submission_then_resubmit(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract, bounty_id = _create(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _submit(direct_vm, contract, direct_bob)
+    direct_vm.sender = direct_bob
+    contract.withdraw_submission(bounty_id)
+    # Worker can now submit a corrected deliverable.
+    _submit(direct_vm, contract, direct_bob, url="https://example.com/deliverable/fixed")
+    stored = contract.get_bounty(bounty_id)
+    assert stored["status"] == "SUBMITTED"
+    assert stored["deliverable_url"] == "https://example.com/deliverable/fixed"
+
+
+def test_withdraw_submission_then_sponsor_reclaim(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract, bounty_id = _create(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _submit(direct_vm, contract, direct_bob)
+    direct_vm.sender = direct_bob
+    contract.withdraw_submission(bounty_id)
+    # Sponsor can now reclaim the escrow because the bounty is OPEN again.
+    direct_vm.sender = direct_alice
+    reclaimed = int(contract.reclaim_bounty(bounty_id))
+    assert reclaimed == 1000
+    assert contract.get_bounty(bounty_id)["status"] == "REFUNDED"
+
+
+def test_withdraw_submission_unauthorized_caller(
+    direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
+):
+    contract, bounty_id = _create(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _submit(direct_vm, contract, direct_bob)
+    direct_vm.sender = direct_charlie
+    with direct_vm.expect_revert("Only the assigned worker may withdraw a submission"):
+        contract.withdraw_submission(bounty_id)
+    # Even the sponsor may not pull a submission back.
+    direct_vm.sender = direct_alice
+    with direct_vm.expect_revert("Only the assigned worker may withdraw a submission"):
+        contract.withdraw_submission(bounty_id)
+
+
+def test_withdraw_submission_rejected_when_not_submitted(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract, bounty_id = _create(direct_vm, direct_deploy, direct_alice, direct_bob)
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("Only a SUBMITTED bounty may have its submission withdrawn"):
+        contract.withdraw_submission(bounty_id)
+
+
+# ---------------------------------------------------------------------------
+# Input hygiene bounds on create_bounty
+# ---------------------------------------------------------------------------
+
+
+def test_create_rejects_oversized_title(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = direct_deploy(CONTRACT)
+    direct_vm.sender = direct_alice
+    with direct_vm.expect_revert("title exceeds maximum length"):
+        contract.create_bounty(_addr(direct_bob), OVERSIZED_TITLE, RUBRIC, KEYWORDS, 75, 1000)
+
+
+def test_create_rejects_oversized_rubric(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = direct_deploy(CONTRACT)
+    direct_vm.sender = direct_alice
+    with direct_vm.expect_revert("requirements_rubric exceeds maximum length"):
+        contract.create_bounty(_addr(direct_bob), TITLE, OVERSIZED_RUBRIC, KEYWORDS, 75, 1000)
+
+
+def test_create_rejects_oversized_keywords_csv(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract = direct_deploy(CONTRACT)
+    direct_vm.sender = direct_alice
+    with direct_vm.expect_revert("required_keywords_csv exceeds maximum length"):
+        contract.create_bounty(
+            _addr(direct_bob), TITLE, RUBRIC, OVERSIZED_KEYWORDS_CSV, 75, 1000
+        )
+
+
+def test_create_rejects_too_many_keywords(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = direct_deploy(CONTRACT)
+    direct_vm.sender = direct_alice
+    with direct_vm.expect_revert("required_keywords_csv exceeds maximum token count"):
+        contract.create_bounty(_addr(direct_bob), TITLE, RUBRIC, TOO_MANY_KEYWORDS, 75, 1000)
+
+
+def test_create_rejects_empty_keyword_token(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract = direct_deploy(CONTRACT)
+    direct_vm.sender = direct_alice
+    with direct_vm.expect_revert("must not contain empty tokens"):
+        contract.create_bounty(
+            _addr(direct_bob), TITLE, RUBRIC, EMPTY_KEYWORD_TOKEN, 75, 1000
+        )
+
+
+def test_create_rejects_oversized_escrow(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = direct_deploy(CONTRACT)
+    direct_vm.sender = direct_alice
+    with direct_vm.expect_revert("escrow_amount exceeds maximum"):
+        contract.create_bounty(
+            _addr(direct_bob), TITLE, RUBRIC, KEYWORDS, 75, MAX_ESCROW + 1
+        )
+
+
+def test_create_accepts_escrow_at_ceiling(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = direct_deploy(CONTRACT)
+    direct_vm.sender = direct_alice
+    bounty_id = int(
+        contract.create_bounty(_addr(direct_bob), TITLE, RUBRIC, KEYWORDS, 75, MAX_ESCROW)
+    )
+    assert contract.get_bounty(bounty_id)["escrow_amount"] == MAX_ESCROW
+
+
+# ---------------------------------------------------------------------------
+# Input hygiene bounds on submit and settle
+# ---------------------------------------------------------------------------
+
+
+def test_submit_rejects_url_with_whitespace(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract, bounty_id = _create(direct_vm, direct_deploy, direct_alice, direct_bob)
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("deliverable_url must not contain whitespace"):
+        contract.submit_deliverable(bounty_id, WHITESPACE_URL, GOOD_MANIFEST)
+
+
+def test_submit_rejects_oversized_url(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract, bounty_id = _create(direct_vm, direct_deploy, direct_alice, direct_bob)
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("deliverable_url length must be between"):
+        contract.submit_deliverable(bounty_id, OVERSIZED_URL, GOOD_MANIFEST)
+
+
+def test_submit_rejects_oversized_manifest(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract, bounty_id = _create(direct_vm, direct_deploy, direct_alice, direct_bob)
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("deliverable_manifest exceeds maximum length"):
+        contract.submit_deliverable(bounty_id, GOOD_URL, OVERSIZED_MANIFEST)
+
+
+def test_settlement_rejects_empty_summary(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract, bounty_id = _create(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _submit(direct_vm, contract, direct_bob)
+    direct_vm.sender = direct_alice
+    with direct_vm.expect_revert("summary must not be empty"):
+        contract.approve_deterministic_settlement(bounty_id, 90, "   ")
+
+
+def test_settlement_rejects_oversized_summary(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract, bounty_id = _create(direct_vm, direct_deploy, direct_alice, direct_bob)
+    _submit(direct_vm, contract, direct_bob)
+    direct_vm.sender = direct_alice
+    with direct_vm.expect_revert("summary exceeds maximum length"):
+        contract.approve_deterministic_settlement(bounty_id, 90, OVERSIZED_SUMMARY)
